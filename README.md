@@ -16,6 +16,10 @@ Mermaid diagrams illustrate request flows, allowing readers to quickly grasp the
 - REST API built with Laravel
 - MySQL database interaction via Eloquent
 - Data handling with Form Requests and API Resources
+- Global exception handling
+- Unit testing using Pest
+- Postman collection included
+- Architecture diagrams using Mermaid
 
 ## The Dataset
 
@@ -808,6 +812,291 @@ Now that we’ve finished setting up the database, our app is starting to grow. 
 
 </details>
 
+
+### Chapter 3: Setting up unit tests
+
+#### Overview
+
+This chapter introduces unit testing using Pest.  Our controllers call Eloquent directly and there is no service layer, so there is nothing to isolate with mocks.  Instead, we test the pieces that can run without a database.  API Resources are tested with models built in memory, Form Request rules are tested directly against Laravel's validator, and the routing and exception handling are tested with requests that are rejected before any query runs.  The controllers themselves are not tested yet since they need a real database.
+
+```mermaid
+flowchart TD
+    A[Test File] --> B{What is under test?}
+    B -- "API Resource" --> C[Models built in memory]
+    B -- "Form Request rules" --> D[Validator, exists rules skipped]
+    B -- "Routes and exception handling" --> E[HTTP kernel, rejected before any query]
+    C --> F[Resource tests\nFast, isolated]
+    D --> G[Request tests\nFast, isolated]
+    E --> H[Route tests\nNo database needed]
+```
+
+<details>
+
+<summary>Chapter Walkthrough</summary>
+
+To test our application, we will use **Pest**.  Pest is a testing framework built on top of PHPUnit with a simpler, more readable syntax.  It was installed when we created the project, so we don't need to add anything to `composer.json`.
+
+Our tests will be written in the `tests` folder, which was also added upon project creation.  It has two subfolders, `tests/Feature` and `tests/Unit`.  Laravel generated an example test in each; we delete both.
+
+Our unit tests go in `tests/Unit`.  The testing class' name is the name of the thing being tested, with the suffix `Test`; Pest only picks up files that end this way.  For each resource we write three files, e.g. for constellations:
+
+    tests/Unit/ConstellationResourcesTest.php
+    tests/Unit/ConstellationRequestTest.php
+    tests/Unit/ConstellationRoutesTest.php
+
+We first configure Pest.  In `tests/Pest.php`:
+
+```php
+pest()->extend(Tests\TestCase::class)->in('Feature', 'Unit');
+```
+
+`Tests\TestCase` is Laravel's base test class.  It boots the application before each test, which gives our tests access to things like `config()`, Laravel's validator and the HTTP kernel.  By default, Pest only extends it for `tests/Feature`; since our unit tests need these too, we add `Unit`.
+
+In the same file, we define two functions that all our tests share:
+
+```php
+function validateWithoutDb(FormRequest $request, array $data): Validator
+{
+    $rules = array_map(
+        fn(array $fieldRules) => array_values(array_filter(
+            $fieldRules,
+            fn($rule) => ! (is_string($rule) && str_starts_with($rule, 'exists:'))
+        )),
+        $request->rules()
+    );
+
+    return validator($data, $rules);
+}
+
+function resourceToArray(mixed $resource): array
+{
+    return json_decode(json_encode($resource), true);
+}
+```
+
+`validateWithoutDb()` takes a Form Request's rules, removes the `exists:` rules, and validates the supplied data against what remains.  The `exists:` rules check that a foreign key is present in another table, which needs a database, so we leave them out of the unit tests and cover them in the next chapter.  All the other rules, such as `required`, `integer`, `max` and `nullable`, are still applied.  `resourceToArray()` converts an API Resource to an array the same way Laravel does when it builds the response body.
+
+Our tests also need sample data.  We put this in `tests/Helpers.php`, and load it from `tests/Pest.php`:
+
+```php
+require_once __DIR__ . '/Helpers.php';
+```
+
+The helpers come in two kinds.  The first kind builds request payloads, i.e. valid JSON bodies that tests can modify:
+
+```php
+function createGalaxyPayload(array $overrides = []): array
+{
+    return array_merge([
+        'galaxyName' => 'Test Galaxy',
+        'galaxyType' => 'Spiral',
+        'distanceMly' => 1234,
+        'redshift' => 6,
+        'massSolar' => 89700,
+        'diameterLy' => 45000,
+        'adderId' => 1,
+    ], $overrides);
+}
+```
+
+A test starts from a valid payload and overrides only the field it cares about.  `array_merge()` lets the values in `$overrides` replace the defaults.
+
+The second kind builds models in memory:
+
+```php
+function makeMinimalUser(int $id, string $name): User
+{
+    return (new User)->forceFill(['user_id' => $id, 'username' => $name]);
+}
+
+function makeGalaxy(): Galaxy
+{
+    $galaxy = (new Galaxy)->forceFill([
+        'galaxy_id' => 5,
+        'galaxy_name' => 'GAL-1',
+        'galaxy_type' => 'Spiral',
+        'distance_mly' => 100,
+        'redshift' => 2,
+        'mass_solar' => 300,
+        'diameter_ly' => 400,
+    ]);
+    $galaxy->setRelation('addedBy', makeMinimalUser(10, 'adder'));
+    $galaxy->setRelation('verifiedBy', makeMinimalUser(11, 'verifier'));
+    return $galaxy;
+}
+```
+
+Instead of loading models from the database, we build them in memory; nothing is saved.  `forceFill()` sets the model's attributes directly, bypassing `$fillable`.  `setRelation()` attaches a related model, standing in for what Eloquent would have loaded from the database.  Note that `setRelation()` takes the name of the relationship method, e.g. `addedBy`, and not the column name `added_by`; the name is what our API Resources read, as in `$this->addedBy`.
+
+The "minimal" helpers, e.g. `makeMinimalUser()`, only fill in the id and name.  We use them for the related models, since our API Resources only output the summary (id and name) of related models.
+
+We start with writing unit tests for our API Resources.  In `tests/Unit` we create `ConstellationResourcesTest.php`:
+
+```php
+it('displays a correct constellation summary', function () {
+    expect(resourceToArray(new ConstellationSummaryResource(makeConstellation())))
+        ->toBe([
+            'constellationId' => 1,
+            'constellationName' => 'C-882',
+        ]);
+});
+
+it('maps a complete constellation record', function () {
+    expect(resourceToArray(new ConstellationDetailResource(makeConstellation())))
+        ->toBe([
+            'constellationId' => 1,
+            'constellationName' => 'C-882',
+            'galaxy' => ['galaxyId' => 1, 'galaxyName' => 'Andromeda'],
+            'addedBy' => ['userId' => 10, 'username' => 'adder'],
+            'verifiedBy' => ['userId' => 11, 'username' => 'verifier'],
+        ]);
+});
+
+it('returns null for a missing verifier', function () {
+    $constellation = makeConstellation();
+    $constellation->setRelation('verifiedBy', null);
+
+    expect(resourceToArray(new ConstellationDetailResource($constellation)))
+        ->toHaveKey('verifiedBy', null);
+});
+```
+
+`it()` defines a test; its first argument is the description, and the second is the function containing the test.  `expect()` starts an assertion, and `toBe()` checks that the value is identical to the expected one, including the order of the keys.  `toHaveKey()` checks that a key exists with the given value.
+
+All three tests are for the resources of a single model.  The third verifies that a missing verifier is serialized as `null` rather than breaking the response.  Since a verifier is optional in our schema, this case matters.
+
+The test for the user resource has one more assertion:
+
+```php
+it('maps a complete user record', function () {
+    $result = resourceToArray(new UserDetailResource(makeUser()));
+
+    expect($result)
+        ->not->toHaveKey('password')
+        ->and($result)->toBe([
+            'userId' => 1,
+            'username' => 'john',
+            'email' => 'john@example.com',
+            'firstName' => 'John',
+            'lastName' => 'Smith',
+            'dateOfBirth' => '2000-02-28',
+        ]);
+});
+```
+
+`makeUser()` gives the user a password, and the test asserts that it never appears in the output.  `->not` negates the assertion that follows it, and `->and()` starts a second assertion on a new value.
+
+The other classes in the `tests/Unit` folder named `*ResourcesTest` follow a similar logic.
+
+We now write unit tests for our Form Requests.  In `tests/Unit` we create `GalaxyRequestTest.php`:
+
+```php
+it('rejects :dataset longer than 100 characters', function (string $field) {
+    expect(validateWithoutDb(
+        new StoreGalaxyRequest,
+        createGalaxyPayload([$field => str_repeat('a', 101)])
+    )
+        ->errors()->has($field))->toBeTrue();
+})->with(['galaxyName', 'galaxyType']);
+
+it('requires :dataset', function (string $field) {
+    $data = createGalaxyPayload();
+    unset($data[$field]);
+
+    expect(validateWithoutDb(
+        new StoreGalaxyRequest,
+        $data
+    )
+        ->errors()->has($field))->toBeTrue();
+})->with(['galaxyName', 'galaxyType', 'distanceMly', 'redshift', 'massSolar', 'diameterLy', 'adderId']);
+
+it('rejects values > 32-bit int max for :dataset', function (string $field) {
+    expect(validateWithoutDb(
+        new StoreGalaxyRequest,
+        createGalaxyPayload([$field => config('starzz.int_max') + 1])
+    )
+        ->errors()->has($field))->toBeTrue();
+})->with(['distanceMly', 'massSolar', 'diameterLy', 'redshift']);
+```
+
+`validateWithoutDb()` returns the validator.  `fails()` is `true` when validation failed, and `errors()->has($field)` is `true` when there is an error for that particular field.  So a test that expects a payload to be accepted asserts `fails()` is `false`, and a test that expects a payload to be rejected asserts that the offending field has an error.
+
+`->with([...])` is a *dataset*.  Pest runs the test once for each value in the list, passing the value as the function's parameter.  The `:dataset` placeholder in the description is replaced by the value, so the first test above is reported as two separate tests, one each for `galaxyName` and `galaxyType`.  This lets us write one test for a rule and apply it to every field it covers.
+
+The tests above use `str_repeat('a', 101)` to build a string one character longer than the allowed 100.  For every limit we write a pair of tests, one just inside it and one just outside it, e.g. 100 characters is accepted and 101 is rejected.  This verifies that the limit is exactly what we configured, and not off by one.  The same is done for the 32-bit integer limits, which are read from `config('starzz.int_min')` and `config('starzz.int_max')` instead of repeating the numbers.  This is why our unit tests need `Tests\TestCase`; `config()` only works once the application is booted.
+
+Some tests pass a list of invalid values:
+
+```php
+it('rejects non-int values for verifier', function (mixed $value) {
+    expect(validateWithoutDb(
+        new StoreGalaxyRequest,
+        createGalaxyPayload(['verifierId' => $value])
+    )
+        ->errors()->has('verifierId'))->toBeTrue();
+})->with(['abc', 1.5]);
+```
+
+Both `'abc'` and `1.5` fail the `integer` rule.  Even though we skip `exists:`, this still verifies that `verifierId` must be an integer.
+
+Not every field has the same limits.  `distanceMly`, `massSolar` and `diameterLy` cannot be negative, so we also have tests that `-1` is rejected and `0` is accepted for them.  `redshift` can be negative, so its tests accept the 32-bit minimum and reject anything below it.  `verifierId` is optional, so there are tests that a payload without it, and one with it set to `null`, are both accepted.
+
+The other classes in the `tests/Unit` folder named `*RequestTest` follow a similar logic.  `StarRequestTest` also tests that `spectralType` accepts 5 characters and rejects 6.  `UserRequestTest` tests that `email` is a valid email and no longer than 100 characters; for the boundary we build an email of exactly 100 characters with `str_repeat('a', 94) . '@a.com'`.
+
+We finish with unit tests for our routes.  In `tests/Unit` we create `ConstellationRoutesTest.php`:
+
+```php
+it('GET returns HTTP 404 for a non-numeric id', function () {
+    $this->get('/api/constellations/xyz')
+        ->assertStatus(404)
+        ->assertExactJson(['message' => 'Not found.']);
+});
+
+it('POST returns HTTP 400 with errors when the body fails validation', function () {
+    $this->post('/api/constellations', [])
+        ->assertStatus(400)
+        ->assertJsonValidationErrors(['constellationName', 'galaxyId', 'adderId']);
+});
+
+it('PUT returns HTTP 400 with errors when the body fails validation', function () {
+    $this->put('/api/constellations/1', [])
+        ->assertStatus(400)
+        ->assertJsonValidationErrors(['constellationName', 'galaxyId', 'adderId']);
+});
+```
+
+`$this->get()`, `$this->post()` and `$this->put()` send requests through the application.  The `assert...` methods check the response.  `assertExactJson()` checks that the body is exactly the given JSON, and `assertJsonValidationErrors()` checks that the response lists errors for the given fields.
+
+These tests verify the decisions we made in `bootstrap/app.php` and in our route files.  The first sends a non-numeric id.  The route's `[0-9]+` constraint rejects it, Laravel throws `NotFoundHttpException`, and our handler responds with HTTP 404.  The other two send an empty body.  Validation fails and our handler responds with HTTP 400 instead of Laravel's default 422.
+
+Why don't these tests need a database?  Form Request validation runs before the controller method does, so for the `PUT` test above, validation fails before `findOrFail()` ever executes.  And a request with a non-numeric id doesn't match any route, so it never reaches a controller at all.
+
+The users have no DELETE endpoint, so `UserRoutesTest` has a test for that decision:
+
+```php
+it('DELETE is not allowed on a user', function () {
+    $this->delete('/api/users/1')->assertStatus(405);
+});
+```
+
+A numeric id is used so that the request matches the path but not the method.  Laravel then responds with HTTP 405 (Method Not Allowed).
+
+The other classes in the `tests/Unit` folder named `*RoutesTest` follow a similar logic.
+
+> **Note:** Strictly speaking, the route tests are feature tests because the requests pass through the whole HTTP layer.  We keep them with the unit tests since they never query the database.
+
+We do not write unit tests for the controllers.  They call Eloquent directly, so testing them without a database would mean mocking Eloquent itself, which tells us very little.  We test them with a real database in the next chapter.
+
+To run the tests:
+
+```bash
+php artisan test
+```
+
+In the next chapter, we introduce integration tests. Unlike the unit tests in this chapter, integration tests send requests through the full application and interact with a database. This allows us to verify that all layers of the application work correctly together, including the `exists:` validation rules that we skipped here and the cascading deletes of galaxies and constellations.
+
+</details>
+
 ## Conclusion
 
-**starzz-laravel** demonstrates a complete, production-style Laravel REST API built incrementally — from setting up routes to database interaction.
+**starzz-laravel** demonstrates a complete, production-style Laravel REST API built incrementally — from setting up routes to database interaction.  It also includes unit tests to ensure correctness of the application's functionality as it increases in complexity.
