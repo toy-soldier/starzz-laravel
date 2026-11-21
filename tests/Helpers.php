@@ -70,6 +70,19 @@ function makeGalaxy(): Galaxy
     return $galaxy;
 }
 
+function insertGalaxy(string $name = 'Test Galaxy'): Galaxy
+{
+    return Galaxy::create([
+        'galaxy_name' => $name,
+        'galaxy_type' => 'Spiral',
+        'distance_mly' => 1,
+        'redshift' => 1,
+        'mass_solar' => 1,
+        'diameter_ly' => 1,
+        'added_by' => 1,
+    ]);
+}
+
 function createConstellationPayload(array $overrides = []): array
 {
     return array_merge([
@@ -94,6 +107,15 @@ function makeConstellation(): Constellation
     $constellation->setRelation('addedBy', makeMinimalUser(10, 'adder'));
     $constellation->setRelation('verifiedBy', makeMinimalUser(11, 'verifier'));
     return $constellation;
+}
+
+function insertConstellation(int $galaxyId, string $name = 'Test Constellation'): Constellation
+{
+    return Constellation::create([
+        'constellation_name' => $name,
+        'galaxy_id' => $galaxyId,
+        'added_by' => 1,
+    ]);
 }
 
 function createStarPayload(array $overrides = []): array
@@ -133,4 +155,18 @@ function makeStar(): Star
     $star->setRelation('addedBy', makeMinimalUser(10, 'adder'));
     $star->setRelation('verifiedBy', makeMinimalUser(11, 'verifier'));
     return $star;
+}
+
+function insertStar(int $constellationId, string $name = 'Test Star'): Star
+{
+    return Star::create([
+        'star_name' => $name,
+        'star_type' => 'red dwarf star',
+        'constellation_id' => $constellationId,
+        'right_ascension' => 1,
+        'declination' => 1,
+        'apparent_magnitude' => 1,
+        'spectral_type' => 'O',
+        'added_by' => 1,
+    ]);
 }

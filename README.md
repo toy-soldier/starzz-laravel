@@ -18,6 +18,7 @@ Mermaid diagrams illustrate request flows, allowing readers to quickly grasp the
 - Data handling with Form Requests and API Resources
 - Global exception handling
 - Unit testing using Pest
+- Integration testing using Pest against a dedicated MySQL test database
 - Postman collection included
 - Architecture diagrams using Mermaid
 
@@ -812,7 +813,6 @@ Now that we’ve finished setting up the database, our app is starting to grow. 
 
 </details>
 
-
 ### Chapter 3: Setting up unit tests
 
 #### Overview
@@ -1087,16 +1087,230 @@ The other classes in the `tests/Unit` folder named `*RoutesTest` follow a simila
 
 We do not write unit tests for the controllers.  They call Eloquent directly, so testing them without a database would mean mocking Eloquent itself, which tells us very little.  We test them with a real database in the next chapter.
 
-To run the tests:
+In the next chapter, we introduce integration tests. Unlike the unit tests in this chapter, integration tests send requests through the full application and interact with a database. This allows us to verify that all layers of the application work correctly together, including the `exists:` validation rules that we skipped here and the cascading deletes of galaxies and constellations.
 
-```bash
-php artisan test
+</details>
+
+### Chapter 4: Setting up integration tests
+
+#### Overview
+
+This chapter introduces integration tests.  Integration tests verify that all layers of the application work correctly together: routing, validation, controllers, Eloquent and the database.  Unlike the unit tests in the previous chapter, they send requests through the full application and interact with a real MySQL database.  To keep our development data safe, the tests use a dedicated test database, `starzz_test`, which has the same tables and the same data as `starzz`.
+
+```mermaid
+flowchart TD
+    A[Feature Test] --> B[TestCase setUp]
+    B --> C{DB_DATABASE ends in _test?}
+    C -- No --> D[Abort, nothing connects]
+    C -- Yes --> E[Begin transaction]
+    E --> F[Request through the full application]
+    F --> G[(starzz_test)]
+    G --> H[Assert on response and database]
+    H --> I[Roll back transaction]
 ```
 
-In the next chapter, we introduce integration tests. Unlike the unit tests in this chapter, integration tests send requests through the full application and interact with a database. This allows us to verify that all layers of the application work correctly together, including the `exists:` validation rules that we skipped here and the cascading deletes of galaxies and constellations.
+<details>
+
+<summary>Chapter Walkthrough</summary>
+
+We use integration tests to check that all the components that we have coded work together as expected.  Our unit tests skipped everything that needs a database: the `exists:` validation rules, the controllers, and the cascading deletes.  The integration tests cover them.
+
+Our integration tests go in `tests/Feature`, which already exists.  Each controller has a dedicated test class, e.g. `ConstellationApiTest.php`.
+
+We first need to point our tests to a different database.  By default, Laravel's `phpunit.xml` configures tests to use an in-memory SQLite database.  Our tests need MySQL, so in `phpunit.xml` we replace:
+
+```xml
+<env name="DB_CONNECTION" value="sqlite"/>
+<env name="DB_DATABASE" value=":memory:"/>
+```
+
+with:
+
+```xml
+<env name="DB_CONNECTION" value="mysql"/>
+<env name="DB_DATABASE" value="starzz_test"/>
+```
+
+The `<env>` entries in `phpunit.xml` are applied when the tests start.  This means that no matter what `.env` says, our tests run against `starzz_test`.  The host, port and credentials are still read from `.env`.
+
+The test database was created beforehand, using the same scripts in `assets` that created our `starzz` database.  This way our tests run against the same schema and the same seed data (100 records per table) as the application.
+
+Since a misconfiguration here would run our tests against the real data, we add a safeguard.  In `tests/TestCase.php`:
+
+```php
+abstract class TestCase extends BaseTestCase
+{
+    protected function setUp(): void
+    {
+        $database = (string) ($_ENV['DB_DATABASE'] ?? getenv('DB_DATABASE'));
+
+        if (! str_ends_with($database, '_test')) {
+            throw new RuntimeException(
+                "Refusing to run tests: DB_DATABASE is '{$database}', but it must end in '_test'."
+            );
+        }
+
+        parent::setUp();
+    }
+}
+```
+
+`setUp()` runs before every test.  It checks the name of the configured database, and throws an exception if the name does not end in `_test`.  Note that the check runs before `parent::setUp()`, which boots the application, so nothing connects to the database when the name is wrong.
+
+Tests that modify data (*POST, PUT, DELETE*) might affect other tests.  To avoid this, we wrap each of them in a database transaction that is rolled back after the test.  In `tests/Pest.php`:
+
+```php
+pest()->extend(Tests\TestCase::class)->in('Unit');
+pest()->extend(Tests\TestCase::class)->use(DatabaseTransactions::class)->in('Feature');
+```
+
+`DatabaseTransactions` is a trait provided by Laravel.  It starts a transaction before each test and rolls it back afterwards, so whatever the test inserted, updated or deleted is undone and the seed data stays intact.  We apply it only to `tests/Feature`; the unit tests never touch the database.
+
+Some tests, like the deletion tests, need records that are guaranteed to have specific children.  Instead of depending on the seed data, they create their own records.  We add these helpers to `tests/Helpers.php`:
+
+```php
+function insertConstellation(int $galaxyId, string $name = 'Test Constellation'): Constellation
+{
+    return Constellation::create([
+        'constellation_name' => $name,
+        'galaxy_id' => $galaxyId,
+        'added_by' => 1,
+    ]);
+}
+
+function insertStar(int $constellationId, string $name = 'Test Star'): Star
+{
+    return Star::create([
+        'star_name' => $name,
+        'star_type' => 'red dwarf star',
+        'constellation_id' => $constellationId,
+        'right_ascension' => 1,
+        'declination' => 1,
+        'apparent_magnitude' => 1,
+        'spectral_type' => 'O',
+        'added_by' => 1,
+    ]);
+}
+```
+
+`insertGalaxy()` is similar.  These helpers save real records to the database, and the transaction undoes them when the test ends.
+
+We now create our integration tests.  In `tests/Feature` we create `ConstellationApiTest.php`:
+
+```php
+it('GET returns a constellation with its galaxy, adder and verifier', function () {
+    $this->getJson('/api/constellations/1')
+        ->assertOk()
+        ->assertJson([
+            'constellationId' => 1,
+            'constellationName' => 'CON-YKkuk',
+            'galaxy' => ['galaxyId' => 1],
+            'addedBy' => ['userId' => 10],
+            'verifiedBy' => ['userId' => 37],
+        ]);
+});
+
+it('GET returns HTTP 404 for a nonexistent id', function () {
+    $this->getJson('/api/constellations/9999')
+        ->assertNotFound()
+        ->assertExactJson(['message' => 'Not found.']);
+});
+```
+
+`getJson()` sends a request to the application with the `Accept: application/json` header already set.  `assertOk()` and `assertNotFound()` check for HTTP 200 and 404, respectively.  `assertJson()` checks that the response contains the given data; unlike `assertExactJson()`, it ignores any other fields in the response, so we only need to list the fields we care about.
+
+The values in the first test come from the seed data; constellation 1 is `CON-YKkuk` in galaxy 1, added by user 10 and verified by user 37.
+
+```php
+it('POST creates a constellation and returns HTTP 201', function () {
+    $this->postJson('/api/constellations', createConstellationPayload(['constellationName' => 'Brand New']))
+        ->assertCreated()
+        ->assertJson(['constellationName' => 'Brand New', 'galaxy' => ['galaxyId' => 1]]);
+
+    $this->assertDatabaseHas('constellations', [
+        'constellation_name' => 'Brand New',
+        'galaxy_id' => 1,
+        'added_by' => 1,
+        'verified_by' => null,
+    ]);
+});
+```
+
+We reuse `createConstellationPayload()` from the previous chapter to build the request body.  After checking the response, `assertDatabaseHas()` queries the database directly to confirm that the record was really saved with the expected values.  This is something our unit tests could not verify.
+
+Now that we have a database, we can also test the `exists:` rules that we skipped in the previous chapter:
+
+```php
+it('POST returns HTTP 400 when a referenced id does not exist', function (string $field, int $value) {
+    $this->postJson('/api/constellations', createConstellationPayload([$field => $value]))
+        ->assertStatus(400)
+        ->assertJsonValidationErrors($field);
+})->with([
+    'galaxyId' => ['galaxyId', 9999],
+    'adderId' => ['adderId', -1],
+    'verifierId' => ['verifierId', 9999],
+]);
+```
+
+This is a dataset like those in the previous chapter, but each entry now has a key and two values.  Pest runs the test once per entry, using the key as part of the test's name and passing the values as the function's parameters.  Each run sends a valid payload with one reference replaced by an id that does not exist in the database, and expects HTTP 400 with an error on that field.
+
+For updates, we create a record of our own and modify it:
+
+```php
+it('PUT updates a constellation and returns HTTP 200', function () {
+    $constellation = insertConstellation(1, 'Before');
+    $id = $constellation->constellation_id;
+
+    $this->putJson("/api/constellations/{$id}", createConstellationPayload([
+        'constellationName' => 'After',
+        'galaxyId' => 2,
+    ]))
+        ->assertOk()
+        ->assertJson(['constellationId' => $id, 'constellationName' => 'After', 'galaxy' => ['galaxyId' => 2]]);
+
+    $this->assertDatabaseHas('constellations', [
+        'constellation_id' => $id,
+        'constellation_name' => 'After',
+        'galaxy_id' => 2,
+    ]);
+});
+```
+
+There is also a test that a *PUT* without a `verifierId` sets the record's verifier back to `null`, since an update replaces all the fields of the record.
+
+Finally, we test deletion.  Our database has foreign keys but no `ON DELETE CASCADE`, and we cannot alter the schema, so the controllers delete the children themselves.  Deleting a constellation also deletes its stars.  Deleting a galaxy deletes its constellations and their stars.  These tests verify that, and also that nothing else is deleted:
+
+```php
+it('DELETE removes a constellation and its stars, and nothing else', function () {
+    $constellation = insertConstellation(1);
+    insertStar($constellation->constellation_id, 'Star A');
+    insertStar($constellation->constellation_id, 'Star B');
+
+    $other = insertConstellation(1, 'Other');
+    $otherStar = insertStar($other->constellation_id, 'Other Star');
+
+    $this->deleteJson("/api/constellations/{$constellation->constellation_id}")
+        ->assertNoContent();
+
+    $this->assertDatabaseMissing('constellations', ['constellation_id' => $constellation->constellation_id]);
+    $this->assertDatabaseMissing('stars', ['constellation_id' => $constellation->constellation_id]);
+    $this->assertDatabaseHas('constellations', ['constellation_id' => $other->constellation_id]);
+    $this->assertDatabaseHas('stars', ['star_id' => $otherStar->star_id]);
+});
+```
+
+The test creates a constellation with two stars, and a second constellation with one star.  After deleting the first constellation, `assertDatabaseMissing()` confirms that it and its stars are gone, and `assertDatabaseHas()` confirms that the second constellation and its star are untouched.  The test for galaxies follows the same idea, one level deeper.
+
+The other classes in the `tests/Feature` folder follow a similar logic.  A few tests are specific to certain resources:
+
+- Users never expose their `password`; `assertJsonMissingPath('password')` verifies this for both *GET* and *POST* responses.
+- When a user is registered, the saved password is the password reset sentinel from our configuration.  For now it is saved as-is; we will revisit this in the next chapter.
+- Updating a user does not change the user's password.
+
+In the next chapter, we take our first step to secure our application.  Until now, anyone who knows the URL of an endpoint can call it freely, and passwords are saved as plain text.  We introduce password hashing in preparation for authentication, which ensures that only authorized users can make changes to our data.
 
 </details>
 
 ## Conclusion
 
-**starzz-laravel** demonstrates a complete, production-style Laravel REST API built incrementally — from setting up routes to database interaction.  It also includes unit tests to ensure correctness of the application's functionality as it increases in complexity.
+**starzz-laravel** demonstrates a complete, production-style Laravel REST API built incrementally — from setting up routes to database interaction.  It also includes unit and integration tests to ensure correctness of the application's functionality as it increases in complexity.

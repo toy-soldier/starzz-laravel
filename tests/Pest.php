@@ -4,11 +4,12 @@ declare(strict_types=1);
 
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Validator;
+use Illuminate\Foundation\Testing\DatabaseTransactions;
 
 require_once __DIR__ . '/Helpers.php';
 
-pest()->extend(Tests\TestCase::class)->in('Feature', 'Unit');
-
+pest()->extend(Tests\TestCase::class)->in('Unit');
+pest()->extend(Tests\TestCase::class)->use(DatabaseTransactions::class)->in('Feature');
 /**
  * Validate data against a Form Request's rules, skipping `exists:` rules
  * because those need a database.
