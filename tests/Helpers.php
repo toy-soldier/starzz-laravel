@@ -33,6 +33,14 @@ function makeUser(): User
     ]);
 }
 
+function createChangePasswordPayload(array $overrides = []): array
+{
+    return array_merge([
+        'existingPassword' => 'oldPassword',
+        'newPassword' => 'newPassword',
+    ], $overrides);
+}
+
 function createGalaxyPayload(array $overrides = []): array
 {
     return array_merge([

@@ -29,3 +29,15 @@ it('PUT returns HTTP 400 with errors when the body fails validation', function (
         ->assertStatus(400)
         ->assertJsonValidationErrors(['username', 'email']);
 });
+
+it('PATCH returns HTTP 404 for a non-numeric id', function () {
+    $this->patch('/api/users/xyz/change-password')
+        ->assertStatus(404)
+        ->assertExactJson(['message' => 'Not found.']);
+});
+
+it('PATCH returns HTTP 400 with errors when the body fails validation', function () {
+    $this->patch('/api/users/1/change-password', [])
+        ->assertStatus(400)
+        ->assertJsonValidationErrors(['existingPassword', 'newPassword']);
+});

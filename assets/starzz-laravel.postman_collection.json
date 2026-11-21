@@ -525,6 +525,40 @@
         }
       },
       "response": []
+    },
+    {
+      "name": "Change User Password",
+      "request": {
+        "method": "PATCH",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n    \"existingPassword\": \"oldPassword\",\r\n    \"newPassword\": \"newPassword\"\r\n}\r\n",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://127.0.0.1:{{port}}/api/users/101/change-password",
+          "protocol": "http",
+          "host": [
+            "127",
+            "0",
+            "0",
+            "1"
+          ],
+          "port": "{{port}}",
+          "path": [
+            "api",
+            "users",
+            "101",
+            "change-password"
+          ]
+        }
+      },
+      "response": []
     }
   ],
   "event": [

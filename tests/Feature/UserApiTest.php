@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use App\Models\User;
+use Illuminate\Support\Facades\Hash;
 
 it('GET returns the list of users', function () {
     $this->getJson('/api/users')
@@ -39,14 +40,15 @@ it('POST creates a user and returns HTTP 201 without the password', function () 
     $this->assertDatabaseHas('users', ['username' => 'testuser']);
 });
 
-it('POST saves the password reset sentinel as the password', function () {
+it('POST saves the password reset sentinel as a hashed password', function () {
     $this->postJson('/api/users', createUserPayload())->assertCreated();
 
     $sentinel = config('starzz.password_reset_sentinel');
     $user = User::where('username', 'testuser')->firstOrFail();
 
     expect($sentinel)->not->toBeNull()
-        ->and($user->password)->toBe($sentinel);
+        ->and($user->password)->not->toBe($sentinel)
+        ->and(Hash::check($sentinel, $user->password))->toBeTrue();
 });
 
 it('PUT updates a user and returns HTTP 200', function () {
@@ -67,4 +69,44 @@ it('PUT does not change the password', function () {
 
 it('PUT returns HTTP 404 for a nonexistent id', function () {
     $this->putJson('/api/users/9999', createUserPayload())->assertNotFound();
+});
+
+it('PATCH changes the password and returns HTTP 204', function () {
+    $user = User::create(['username' => 'pwuser', 'email' => 'pw@test.com', 'password' => 'oldPassword']);
+
+    $this->patchJson("/api/users/{$user->user_id}/change-password", createChangePasswordPayload())
+        ->assertNoContent();
+
+    $user->refresh();
+
+    expect(Hash::check('newPassword', $user->password))->toBeTrue()
+        ->and(Hash::check('oldPassword', $user->password))->toBeFalse();
+});
+
+it('PATCH returns HTTP 400 and keeps the password when the existing password is wrong', function () {
+    $user = User::create(['username' => 'pwuser', 'email' => 'pw@test.com', 'password' => 'oldPassword']);
+
+    $this->patchJson("/api/users/{$user->user_id}/change-password", createChangePasswordPayload([
+        'existingPassword' => 'wrongPassword',
+    ]))
+        ->assertStatus(400)
+        ->assertJsonValidationErrors('existingPassword');
+
+    expect(Hash::check('oldPassword', $user->refresh()->password))->toBeTrue();
+});
+
+it('PATCH replaces the sentinel password of a newly registered user', function () {
+    $id = $this->postJson('/api/users', createUserPayload())->assertCreated()->json('userId');
+
+    $this->patchJson("/api/users/{$id}/change-password", [
+        'existingPassword' => config('starzz.password_reset_sentinel'),
+        'newPassword' => 'myNewPassword',
+    ])->assertNoContent();
+
+    expect(Hash::check('myNewPassword', User::findOrFail($id)->password))->toBeTrue();
+});
+
+it('PATCH returns HTTP 404 for a nonexistent id', function () {
+    $this->patchJson('/api/users/9999/change-password', createChangePasswordPayload())
+        ->assertNotFound();
 });

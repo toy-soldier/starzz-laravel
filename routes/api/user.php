@@ -11,4 +11,5 @@ Route::post('/', [UserController::class, 'registerUser']);
 Route::where(['id' => '[0-9]+'])->group(function () {
     Route::get('/{id}', [UserController::class, 'getUser']);
     Route::put('/{id}', [UserController::class, 'updateUser']);
+    Route::patch('/{id}/change-password', [UserController::class, 'changePassword']);
 });

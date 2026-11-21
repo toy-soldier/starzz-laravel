@@ -4,12 +4,16 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers;
 
+use App\Http\Requests\ChangePasswordRequest;
 use App\Http\Requests\StoreUserRequest;
 use App\Http\Resources\UserDetailResource;
 use App\Http\Resources\UserSummaryResource;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
+use Illuminate\Http\Response;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Validation\ValidationException;
 
 class UserController extends Controller
 {
@@ -58,5 +62,22 @@ class UserController extends Controller
         ]);
 
         return $this->getUser($id);
+    }
+
+    public function changePassword(ChangePasswordRequest $request, int $id): Response
+    {
+        $data = $request->validated();
+
+        $user = User::findOrFail($id);
+
+        if (! Hash::check($data['existingPassword'], $user->password)) {
+            throw ValidationException::withMessages([
+                'existingPassword' => 'The existing password is incorrect.',
+            ]);
+        }
+
+        $user->update(['password' => $data['newPassword']]);
+
+        return response()->noContent();
     }
 }

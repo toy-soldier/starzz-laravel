@@ -19,6 +19,7 @@ Mermaid diagrams illustrate request flows, allowing readers to quickly grasp the
 - Global exception handling
 - Unit testing using Pest
 - Integration testing using Pest against a dedicated MySQL test database
+- BCrypt password hashing
 - Postman collection included
 - Architecture diagrams using Mermaid
 
@@ -1311,6 +1312,285 @@ In the next chapter, we take our first step to secure our application.  Until no
 
 </details>
 
+### Chapter 5: Setting up password hashing
+
+#### Overview
+
+In this chapter, we introduce password hashing.  Passwords are now saved as hashes instead of plain text.  When a user is registered, the default password is hashed before it is saved to the database.  To do this, we change our `User` model to extend Laravel's `Authenticatable` class and tell it to hash the `password` attribute whenever it is set.  A new endpoint, `PATCH /api/users/{id}/change-password`, allows users to update their password by supplying their existing password and a new one.  The same endpoint handles both the initial password reset (where the existing password is the sentinel) and a regular password change.
+
+#### User Registration
+
+```mermaid
+sequenceDiagram
+    autonumber
+
+    actor User
+    participant Application
+    participant Database
+
+    User ->> Application: **POST** /api/users<br/>{"username": "john1234",<br/>"email": "john@acme.com"}
+    Application ->> Application: Hash the default password
+    Application ->> Database: Save user data with<br/>**username**=*john1234*,<br/>**password**=<hash>
+    Database ->> Application: New user data
+    Application ->> User: HTTP 201
+```
+
+#### User Changes Password
+
+```mermaid
+sequenceDiagram
+    autonumber
+
+    actor User
+    participant Application
+    participant Database
+
+    User ->> Application: **PATCH** /api/users/<id>/change-password<br/>{"existingPassword": <existing password>,<br/>"newPassword": <new password>}
+    Application ->> Database: Query user data with<br/>**userId**=<id>
+    Database ->> Application: User data
+    Application ->> Application: Verify that the saved password<br/>matches <existing password>
+    Application ->> Database: Update user data with<br/>**password**=hash(<new password>)
+    Database ->> Application: Result
+    Application ->> User: HTTP 204
+```
+
+#### New Endpoint
+
+| Endpoint                          | Method | Description                  | Response       |
+|-----------------------------------|--------|------------------------------|----------------|
+| `/api/users/{id}/change-password` | PATCH  | Updates the user's password  | 204 No Content |
+
+*The Postman collection in* `assets/starzz-laravel.postman_collection.json` *has been updated to include this new endpoint.*
+
+<details>
+
+<summary>Chapter Walkthrough</summary>
+
+Whenever users are registered to our application, they are assigned a default password.  This default is a reminder that a user has to change his password before he can fully use our application; we will henceforth be referring to this value as the *sentinel*.  We keep it in a configuration file so that it is defined in one place.  In `config/starzz.php`:
+
+```php
+return [
+    'password_reset_sentinel' => env('STARZZ_PASSWORD_RESET_SENTINEL'),
+    // ...
+];
+```
+
+Our code reads it with `config('starzz.password_reset_sentinel')`.  We use `config()` instead of calling `env()` directly because `env()` is only reliable inside the files in `config/`.
+
+Up until now, our application saved the sentinel to the database as-is.  We did this deliberately in Chapter 2, so that we could confirm that writing to the database actually works.  This is not secure.  Anyone with access to the database can see every user's password.  To prevent this, we need some way to save passwords in a form that cannot be reversed.
+
+This is where hashing comes in.  A hash is the result of passing some input through a hash function.  A hash function is a one-way function i.e. given the result of the function, we cannot figure out what the input to the function was.  This can be used for passwords.
+
+This is how hashing will help us.  Any password that is to be saved to the database is first passed to a hash function.  The hash, not the actual password, is the user's password saved to the database.  Even if someone manages to read this value, there is no way to derive the original password from it.
+
+Laravel uses the BCrypt algorithm by default.  BCrypt is a salted hash function, meaning the same input produces a different hash each time.  A password's hashes taken at different times will be different.  So to check a password later on, we cannot simply hash the supplied password and compare it to the saved hash.  Instead, we use `Hash::check()`, which extracts the salt from the saved hash and uses it to verify the supplied password.
+
+Laravel provides everything we need, so there is nothing to add to `composer.json`.
+
+Now we modify our model.  In `app/Models/User.php`:
+
+```php
+use Illuminate\Foundation\Auth\User as Authenticatable;
+
+class User extends Authenticatable
+{
+    protected $table = 'users';
+
+    protected $primaryKey = 'user_id';
+
+    protected $fillable = [
+        'username',
+        'password',
+        'email',
+        'first_name',
+        'last_name',
+        'date_of_birth',
+    ];
+
+    public $timestamps = false;
+
+    protected function casts(): array
+    {
+        return ['password' => 'hashed'];
+    }
+}
+```
+
+There are two changes.  First, `User` now extends `Authenticatable` instead of `Model`.  `Authenticatable` is Laravel's base class for models that represent users who log in.  It is still an Eloquent model, so everything we had before continues to work.  We will need it when we add authentication, so we make the change now.
+
+Second, we add `casts()`.  A cast tells Eloquent to convert an attribute to a particular type as it is set or retrieved.  The `hashed` cast hashes the value of the attribute whenever it is assigned.  `password` is in `$fillable`, so `User::create()` assigns it, and the cast hashes it on the way in.
+
+Notice that we do not need to change `registerUser()` in `UserController`:
+
+```php
+$user = User::create([
+    'username' => $data['username'],
+    'email' => $data['email'],
+    'password' => config('starzz.password_reset_sentinel'),
+    'first_name' => $data['firstName'] ?? null,
+    'last_name' => $data['lastName'] ?? null,
+    'date_of_birth' => $data['dateOfBirth'] ?? null,
+]);
+```
+
+The controller still passes the sentinel as-is; the model takes care of hashing it.  This is an advantage of enforcing hashing in the model rather than in the controller.  Any code that sets a user's password will have it hashed, so we cannot forget to do it.
+
+Note that the cast only applies to values that are assigned.  Passwords that were already saved in the database are not changed.
+
+Now that passwords are hashed, a newly registered user needs some way to replace the sentinel without manually updating the database.  Another use case is to allow users to periodically update their passwords, which is a good security practice.  Both can be satisfied by one endpoint, `PATCH /api/users/{id}/change-password`; the user supplies his existing password and nominates a new one.  If the user is instead requesting a password reset, he explicitly supplies the sentinel as the existing password.  We use *PATCH* instead of *PUT* because we only update one field of the user.
+
+We start with the route.  In `routes/api/user.php`, we add the route to the group that requires `id` to be numeric:
+
+```php
+Route::where(['id' => '[0-9]+'])->group(function () {
+    Route::get('/{id}', [UserController::class, 'getUser']);
+    Route::put('/{id}', [UserController::class, 'updateUser']);
+    Route::patch('/{id}/change-password', [UserController::class, 'changePassword']);
+});
+```
+
+We then create a Form Request to validate the input.  In `app/Http/Requests`, we create `ChangePasswordRequest`:
+
+```php
+class ChangePasswordRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    public function rules(): array
+    {
+        return [
+            'existingPassword' => ['required', 'string'],
+            'newPassword' => ['required', 'string'],
+        ];
+    }
+}
+```
+
+Finally, we add a method to `UserController`:
+
+```php
+public function changePassword(ChangePasswordRequest $request, int $id): Response
+{
+    $data = $request->validated();
+
+    $user = User::findOrFail($id);
+
+    if (! Hash::check($data['existingPassword'], $user->password)) {
+        throw ValidationException::withMessages([
+            'existingPassword' => 'The existing password is incorrect.',
+        ]);
+    }
+
+    $user->update(['password' => $data['newPassword']]);
+
+    return response()->noContent();
+}
+```
+
+The method first finds the user; a nonexistent id results in HTTP 404.  It then uses `Hash::check()` to compare the existing password supplied by the user with the user's saved password.  If they don't match, we throw a `ValidationException`, the same exception Laravel throws when validation fails.  Our handler in `bootstrap/app.php` already handles it, so the user gets HTTP 400 with the error listed under `existingPassword`; no new handler is needed.  If they match, we update the password.  We pass the new password as-is, since the `hashed` cast hashes it.  The method returns HTTP 204.
+
+We now update our tests.  When we execute them, we see that one has broken.  In `tests/Feature/UserApiTest.php`, our test for the sentinel asserted that the saved password is equal to the sentinel.  It is now a hash, so we change the test:
+
+```php
+it('POST saves the password reset sentinel as a hashed password', function () {
+    $this->postJson('/api/users', createUserPayload())->assertCreated();
+
+    $sentinel = config('starzz.password_reset_sentinel');
+    $user = User::where('username', 'testuser')->firstOrFail();
+
+    expect($sentinel)->not->toBeNull()
+        ->and($user->password)->not->toBe($sentinel)
+        ->and(Hash::check($sentinel, $user->password))->toBeTrue();
+});
+```
+
+The test now asserts two things: that the saved password is not the sentinel, and that `Hash::check()` confirms that it is a hash of the sentinel.
+
+Our other tests are unaffected.  The test that a user update does not change the password still passes, since updating a user never touches the password.  The unit test for the user API Resource gives its in-memory user a password; that password is now hashed, but the test only asserts that no `password` key is in the output, so it still passes.
+
+We now add tests for the new endpoint.  First we add a helper to `tests/Helpers.php` that builds a valid request body:
+
+```php
+function createChangePasswordPayload(array $overrides = []): array
+{
+    return array_merge([
+        'existingPassword' => 'oldPassword',
+        'newPassword' => 'newPassword',
+    ], $overrides);
+}
+```
+
+In `tests/Unit` we create `ChangePasswordRequestTest.php`:
+
+```php
+it('requires :dataset', function (string $field) {
+    $data = createChangePasswordPayload();
+    unset($data[$field]);
+
+    expect(validateWithoutDb(
+        new ChangePasswordRequest,
+        $data
+    )
+        ->errors()->has($field))->toBeTrue();
+})->with(['existingPassword', 'newPassword']);
+```
+
+We also add route tests to `UserRoutesTest.php`: a non-numeric id results in HTTP 404, and an empty body results in HTTP 400 with errors on both fields.  Neither needs a database, since validation runs before the controller method does.
+
+In `tests/Feature/UserApiTest.php`, we add the integration tests:
+
+```php
+it('PATCH changes the password and returns HTTP 204', function () {
+    $user = User::create(['username' => 'pwuser', 'email' => 'pw@test.com', 'password' => 'oldPassword']);
+
+    $this->patchJson("/api/users/{$user->user_id}/change-password", createChangePasswordPayload())
+        ->assertNoContent();
+
+    $user->refresh();
+
+    expect(Hash::check('newPassword', $user->password))->toBeTrue()
+        ->and(Hash::check('oldPassword', $user->password))->toBeFalse();
+});
+
+it('PATCH returns HTTP 400 and keeps the password when the existing password is wrong', function () {
+    $user = User::create(['username' => 'pwuser', 'email' => 'pw@test.com', 'password' => 'oldPassword']);
+
+    $this->patchJson("/api/users/{$user->user_id}/change-password", createChangePasswordPayload([
+        'existingPassword' => 'wrongPassword',
+    ]))
+        ->assertStatus(400)
+        ->assertJsonValidationErrors('existingPassword');
+
+    expect(Hash::check('oldPassword', $user->refresh()->password))->toBeTrue();
+});
+```
+
+Each test creates its own user, and the transaction from the previous chapter undoes it when the test ends.  Since the `hashed` cast applies to `User::create()`, the test user's password is hashed just like a real one.  `refresh()` reloads the model from the database, so we assert on what was actually saved.  The second test also verifies that the password is unchanged after a failed attempt.
+
+The last two tests cover the reset flow and a nonexistent id:
+
+```php
+it('PATCH replaces the sentinel password of a newly registered user', function () {
+    $id = $this->postJson('/api/users', createUserPayload())->assertCreated()->json('userId');
+
+    $this->patchJson("/api/users/{$id}/change-password", [
+        'existingPassword' => config('starzz.password_reset_sentinel'),
+        'newPassword' => 'myNewPassword',
+    ])->assertNoContent();
+
+    expect(Hash::check('myNewPassword', User::findOrFail($id)->password))->toBeTrue();
+});
+```
+
+The test registers a user through the API, then uses the sentinel as the existing password, exactly as a real user would.  This verifies that the registration and the password change work together.
+
+We have made meaningful progress in securing our users' passwords: they are now saved as hashes, making the original values practically unrecoverable even if the database is compromised, and users can replace the sentinel with a password of their own.  However, securing passwords alone is not enough.  At the moment, anyone who knows the URL of an endpoint can call it freely.  In the next chapter, we introduce JWT (JSON Web Token) authentication.
+
+</details>
+
 ## Conclusion
 
-**starzz-laravel** demonstrates a complete, production-style Laravel REST API built incrementally — from setting up routes to database interaction.  It also includes unit and integration tests to ensure correctness of the application's functionality as it increases in complexity.
+**starzz-laravel** demonstrates a complete, production-style Laravel REST API built incrementally — from setting up routes to database interaction and password hashing.  It also includes unit and integration tests to ensure correctness of the application's functionality as it increases in complexity.
