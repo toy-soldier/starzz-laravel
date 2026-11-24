@@ -20,6 +20,8 @@ Mermaid diagrams illustrate request flows, allowing readers to quickly grasp the
 - Unit testing using Pest
 - Integration testing using Pest against a dedicated MySQL test database
 - BCrypt password hashing
+- JWT-based authentication
+- Role-based access control (ADMIN and USER roles)
 - Postman collection included
 - Architecture diagrams using Mermaid
 
@@ -1591,6 +1593,594 @@ We have made meaningful progress in securing our users' passwords: they are now 
 
 </details>
 
+### Chapter 6: Setting up JWT
+
+Project dependencies added:
+
+    firebase/php-jwt
+
+#### Overview
+
+In this chapter, we secure our application.  We first define our application's access rules.  We then implement simple role based access control and authentication using JWT (JSON Web Token), which is the standard approach for securing REST APIs.  A new endpoint, `POST /api/login`, issues a token to users who supply valid credentials.  Two middleware then protect our routes: one requires a valid token, and the other requires a particular role in that token.
+
+#### Login
+
+```mermaid
+sequenceDiagram
+    autonumber
+
+    actor User
+    participant Database
+    participant Application
+    participant ConfigFile
+
+    User ->> Application: **POST** /api/login<br/>{"username": <username>,<br/>"password": <password>}
+    Application ->> Database: Query user with<br/>**username**=<username>
+    Database ->> Application: User data
+    Application ->> Application: Verify that <password> matches the saved hash<br/>and that <password> is not the sentinel
+    Application ->> ConfigFile: Check if user has admin privileges
+    ConfigFile ->> Application: Result
+    Application ->> User: Token
+```
+
+#### Admin Registers User
+
+```mermaid
+sequenceDiagram
+    autonumber
+
+    actor Admin
+    participant Application
+    participant Database
+
+    Admin ->> Application: **POST** /api/users<br/>Authorization: Bearer <token><br/>{"username": "john1234",<br/> "email": "john@acme.com"}
+    Application ->> Application: Verify the token and check that its role is ADMIN
+    Application ->> Database: Save user data with<br/>**username**=*john1234*,<br/>**password**=hash(sentinel)
+    Database ->> Application: New user data
+    Application ->> Admin: HTTP 201
+```
+
+#### Access Rules
+
+| Endpoints                                                                                   | Access                  |
+|---------------------------------------------------------------------------------------------|-------------------------|
+| `POST /api/login`                                                                           | Public                  |
+| `PATCH /api/users/{id}/change-password`                                                     | Public                  |
+| `GET` on `/api/galaxies`, `/api/constellations`, `/api/stars` (lists and single records)    | Public                  |
+| `POST /api/users`                                                                           | Admins only             |
+| All other endpoints                                                                         | Any authenticated user  |
+
+#### New Endpoint
+
+| Endpoint     | Method | Description                                                  | Response |
+|--------------|--------|--------------------------------------------------------------|----------|
+| `/api/login` | POST   | Returns a JWT to be used to authenticate subsequent requests | 200 OK   |
+
+*The Postman collection in* `assets/starzz-laravel.postman_collection.json` *has been updated to include this new endpoint.  Requests needing Authorization headers have also been updated.*
+
+#### Sample Responses
+
+POST /api/login
+
+```json
+{
+    "token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9..."
+}
+```
+
+POST /api/login (user is not registered or whose password is incorrect)
+
+```json
+{
+    "message": "Invalid credentials."
+}
+```
+
+POST /api/login (user whose password is still the sentinel)
+
+```json
+{
+    "message": "Password reset required before logging in.",
+    "userId": 101
+}
+```
+
+<details>
+
+<summary>Chapter Walkthrough</summary>
+
+*How JWT works*
+
+For our application, we want users to log in using a new **POST** `/api/login` endpoint.  When a user logs in with valid credentials, the application issues a signed token.  The user then includes this token in subsequent requests, and the application verifies it before granting access.  This is called token-based authentication.
+
+A JWT is a string made of three parts separated by dots: a header, a payload and a signature.  The payload contains *claims*, which are pieces of information about the user, such as the user's id, username and role.  The signature is created from the header and the payload using a secret key that only our application knows.
+
+Note that the header and the payload are only encoded, not encrypted; anyone who has the token can read them.  What a user cannot do is change them.  If even one character of the payload is altered, the signature no longer matches and our application rejects the token.  That is why we never put anything sensitive, like a password, in a token, and why the secret key must stay secret.
+
+*The access rules*
+
+Refer to the *Access Rules* table in the overview.  Galaxies, constellations and stars are read-only, non-sensitive data, so their *GET* endpoints are public.  The user endpoints return personal information (email, name, date of birth), so they are protected.  Everything that modifies data requires a token, and only admins can register new users.
+
+`PATCH /api/users/{id}/change-password` is public.  A user whose password is the sentinel cannot get a token, since login is blocked for them.  They need to call this endpoint first, so requiring a token here would create a deadlock.  The `existingPassword` in the request body is the only gate needed.
+
+*The admins*
+
+To satisfy the admin-only rule, we need to identify our admins.  This is usually done by tagging them in our `users` table with a field like `is_admin`.  However, our assumption is that we cannot alter our database schema.  As a workaround, we list the admin usernames in a configuration file.  The downside is that if we ever need to modify this list, we would need to change the file and redeploy.
+
+Before protecting `POST /api/users`, we created the users `admin1`, `admin2` and `admin3` by registering them and changing their passwords using the endpoints from the previous chapters.  After this chapter, registering a user requires an admin token, so this can no longer be done without one.
+
+*The dependency*
+
+To create and verify tokens, we use **firebase/php-jwt**, a small library that does only that.  We install it with Composer:
+
+```bash
+composer require firebase/php-jwt
+```
+
+This adds the package to `composer.json` and `composer.lock`.
+
+*The configuration*
+
+Our application needs a secret key to sign tokens.  This is sensitive information, so we store it in `.env`:
+
+```dotenv
+STARZZ_JWT_SECRET=<your-secret-key>
+```
+
+We use HS256, the signing algorithm that uses a single shared secret, so the key should be long and random; we use at least 32 characters.
+
+As we learned earlier, we read environment variables only inside the files in `config/`.  In `config/starzz.php`, we add:
+
+```php
+'jwt_secret' => env('STARZZ_JWT_SECRET'),
+'jwt_ttl' => 86400,
+
+'admins' => ['admin1', 'admin2', 'admin3'],
+```
+
+`jwt_ttl` is the token's lifetime in seconds; we specify that tokens should expire after 24 hours.  `admins` is our list of admins.  It is not a secret, so it doesn't need to be in `.env`.
+
+*The token service*
+
+Both our login code and our middleware need to create or read tokens, so we put that logic in one class.  In `app/Services/JwtService.php`:
+
+```php
+class JwtService
+{
+    private const ALGORITHM = 'HS256';
+
+    public function __construct(
+        private readonly string $secret,
+        private readonly int $ttlSeconds,
+    ) {}
+
+    public function generateToken(int $id, string $username, string $role): string
+    {
+        $now = time();
+
+        return JWT::encode([
+            'sub' => (string) $id,
+            'username' => $username,
+            'role' => $role,
+            'iat' => $now,
+            'exp' => $now + $this->ttlSeconds,
+        ], $this->secret, self::ALGORITHM);
+    }
+
+    public function decode(string $token): array
+    {
+        return (array) JWT::decode($token, new Key($this->secret, self::ALGORITHM));
+    }
+}
+```
+
+`generateToken()` builds the payload and signs it.  `sub` (subject), `iat` (issued at) and `exp` (expiration) are standard claim names.  We use `sub` for the user's id, which the JWT standard requires to be a string.  `username` and `role` are our own claims.
+
+`decode()` verifies the signature and the expiration, and returns the claims as an array.  If the token is malformed, has been tampered with, or has expired, the library throws an exception.  We rely on this to reject bad tokens.
+
+Notice that the constructor needs a string and an integer.  Laravel creates objects for us through its *service container*; when a class asks for a `JwtService`, the container builds one.  It can build classes whose constructors need other classes, but it has no way to know what to pass for a plain string or integer.  So we tell it how to build `JwtService`.  In `app/Providers/AppServiceProvider.php`:
+
+```php
+public function register(): void
+{
+    $this->app->singleton(JwtService::class, fn () => new JwtService(
+        config('starzz.jwt_secret'),
+        config('starzz.jwt_ttl'),
+    ));
+}
+```
+
+`singleton()` registers a recipe for building the object, and the container builds it once and reuses that same instance afterwards.  From now on, any class that declares a `JwtService` as a parameter, whether in a constructor or in a controller method, receives a ready-made instance.
+
+*The login endpoint*
+
+We need a Form Request to validate the credentials.  In `app/Http/Requests`, we create `LoginRequest`, which requires `username` and `password` as strings.
+
+In `app/Http/Controllers`, we create `AuthController`:
+
+```php
+class AuthController extends Controller
+{
+    public function login(LoginRequest $request, JwtService $jwt): JsonResponse
+    {
+        $data = $request->validated();
+
+        $user = User::where('username', $data['username'])->first();
+
+        if ($user === null || ! Hash::check($data['password'], $user->password)) {
+            return response()->json(['message' => 'Invalid credentials.'], 401);
+        }
+
+        if (Hash::check(config('starzz.password_reset_sentinel'), $user->password)) {
+            return response()->json([
+                'message' => 'Password reset required before logging in.',
+                'userId' => $user->user_id,
+            ], 403);
+        }
+
+        $role = in_array($user->username, config('starzz.admins'), true) ? 'ADMIN' : 'USER';
+
+        return response()->json([
+            'token' => $jwt->generateToken($user->user_id, $user->username, $role),
+        ]);
+    }
+}
+```
+
+Note that `login()` receives two parameters, `LoginRequest` and `JwtService`.  Laravel resolves both through the service container, so the Form Request validates the input before our code runs, and `$jwt` is the instance we registered earlier.
+
+A login attempt can fail in three ways:
+
+- The supplied username doesn't exist in the database.
+- The supplied username exists but the supplied password doesn't match the saved hash.
+- The supplied credentials are correct but the password is the sentinel.
+
+We handle the first two cases with the same response, HTTP 401 and the same message.  We deliberately do this to avoid revealing whether a given username exists.  For the third case, we can be a bit more helpful because the user attempting to log in has given the correct credentials; it's just a password reset that is lacking.  We respond with HTTP 403 and include the user's id, so the client can direct the user to `PATCH /api/users/{id}/change-password`.
+
+To detect the sentinel, we use `Hash::check()` with the sentinel from our configuration.  As we learned in the previous chapter, we cannot simply hash the sentinel and compare hashes, because BCrypt hashes are salted.
+
+Finally, we determine the user's role by checking if the username is in the admin list, and issue the token.  The `true` in `in_array()` makes the comparison strict.
+
+*The middleware*
+
+With the login endpoint in place, we now need to check the token on every protected request.  We do this with *middleware*.  Middleware is a class that sits between the router and the controller.  Every request passes through it before it reaches the controller, and it decides whether to pass the request along or to respond immediately.
+
+In `app/Http/Middleware`, we create `AuthenticateJwt`:
+
+```php
+class AuthenticateJwt
+{
+    public function __construct(private readonly JwtService $jwt) {}
+
+    public function handle(Request $request, Closure $next): Response
+    {
+        $token = $request->bearerToken();
+
+        if (blank($token)) {
+            return $this->unauthorized();
+        }
+
+        try {
+            $claims = $this->jwt->decode($token);
+        } catch (UnexpectedValueException|DomainException|InvalidArgumentException) {
+            return $this->unauthorized();
+        }
+
+        $request->attributes->set('jwt_claims', $claims);
+
+        return $next($request);
+    }
+
+    private function unauthorized(): Response
+    {
+        return response()->json(['message' => 'Unauthenticated.'], 401);
+    }
+}
+```
+
+`handle()` is the method Laravel calls for each request.  `$request->bearerToken()` extracts the token from an `Authorization: Bearer <token>` header, and returns `null` if there is none.  If the token is missing, or if `decode()` throws because the token is malformed, tampered with or expired, we respond with HTTP 401 and the request goes no further.
+
+`$next($request)` passes the request on to the next middleware, or to the controller.  We only call it when the token is valid.  Before that, we store the token's claims in the request with `$request->attributes->set()`.  Request attributes are a place to attach information to a request so that later code can read it, in this case the next middleware.
+
+Since the middleware has a `JwtService` in its constructor, Laravel builds it through the service container, and we get the instance we registered earlier.
+
+The second middleware checks the role.  In `app/Http/Middleware`, we create `RequireRole`:
+
+```php
+class RequireRole
+{
+    public function handle(Request $request, Closure $next, string $role): Response
+    {
+        $claims = $request->attributes->get('jwt_claims', []);
+
+        if (($claims['role'] ?? null) !== $role) {
+            return response()->json(['message' => 'Forbidden.'], 403);
+        }
+
+        return $next($request);
+    }
+}
+```
+
+This middleware reads the claims that `AuthenticateJwt` stored, and responds with HTTP 403 if the role is not the one required.  HTTP 403 means that the user is known but lacks permission, whereas HTTP 401 means that the user has not authenticated.  The `$role` parameter is supplied from the route, as we'll see below.
+
+Note that `RequireRole` depends on the claims stored by `AuthenticateJwt`, so it must run after it.
+
+We then give our middleware short names so our routes can refer to them.  In `bootstrap/app.php`:
+
+```php
+->withMiddleware(function (Middleware $middleware): void {
+    $middleware->alias([
+        'jwt.auth' => AuthenticateJwt::class,
+        'role' => RequireRole::class,
+    ]);
+})
+```
+
+*The routes*
+
+We now apply our access rules in the route files.  In `routes/api/constellation.php`:
+
+```php
+// Public
+Route::get('/', [ConstellationController::class, 'getConstellationList']);
+
+Route::where(['id' => '[0-9]+'])->group(function () {
+    Route::get('/{id}', [ConstellationController::class, 'getConstellation']);
+});
+
+// Requires a valid token
+Route::middleware('jwt.auth')->group(function () {
+    Route::post('/', [ConstellationController::class, 'registerConstellation']);
+
+    Route::where(['id' => '[0-9]+'])->group(function () {
+        Route::put('/{id}', [ConstellationController::class, 'updateConstellation']);
+        Route::delete('/{id}', [ConstellationController::class, 'deleteConstellation']);
+    });
+});
+```
+
+The routes are split into two parts.  The first is public, and the second is in a group with `Route::middleware('jwt.auth')`, so every request to those routes passes through `AuthenticateJwt` first.  The route files for galaxies and stars follow the same pattern.
+
+In `routes/api/user.php`:
+
+```php
+// Public
+Route::where(['id' => '[0-9]+'])->group(function () {
+    Route::patch('/{id}/change-password', [UserController::class, 'changePassword']);
+});
+
+// Requires a valid token
+Route::middleware('jwt.auth')->group(function () {
+    Route::get('/', [UserController::class, 'getUserList']);
+
+    Route::where(['id' => '[0-9]+'])->group(function () {
+        Route::get('/{id}', [UserController::class, 'getUser']);
+        Route::put('/{id}', [UserController::class, 'updateUser']);
+    });
+
+    // Requires the ADMIN role
+    Route::middleware('role:ADMIN')->post('/', [UserController::class, 'registerUser']);
+});
+```
+
+All the user endpoints except `change-password` need a token.  The registration route has a second middleware, `role:ADMIN`; the text after the colon is passed to `RequireRole` as its `$role` parameter.  Note that this route is nested inside the `jwt.auth` group.  The outer middleware runs first, so by the time `RequireRole` runs, the claims are already available.
+
+In `routes/api.php`, we register the login route in its own file, `routes/api/auth.php`, with the prefix `login`:
+
+```php
+Route::prefix('login')->group(__DIR__ . '/api/auth.php');
+```
+
+*Statelessness*
+
+We don't need to configure anything to make our application stateless.  Authentication state is carried entirely in the token; the application stores nothing between requests.
+
+*What the token does and doesn't do*
+
+Our middleware trusts the token's signature and expiration, and nothing else.  It doesn't query the database.  This is what makes token authentication fast, but it has consequences.  A token's role stays valid until the token expires, even if the admin list changes in the meantime.  And since nothing is stored on our side, there is no way to cancel a token that has already been issued, so we don't provide a logout endpoint.
+
+Also note that our middleware does not use Laravel's built-in authentication system.  Laravel's own guards would normally populate the current user, which code can read with `Auth::user()`.  We don't use them; our middleware reads claims from the token and passes them along in the request.
+
+*The tests*
+
+When we run our existing tests, we discover that many of them have failed.  The protected endpoints now return HTTP 401 for requests without a token.
+
+We fix this in one place instead of editing every test.  In `tests/Pest.php`, we have each test start with a regular user's token:
+
+```php
+pest()->extend(Tests\TestCase::class)
+    ->beforeEach(function () {
+        $this->withToken(userToken());
+    })
+    ->in('Unit');
+
+pest()->extend(Tests\TestCase::class)
+    ->use(DatabaseTransactions::class)
+    ->beforeEach(function () {
+        $this->withToken(userToken());
+    })
+    ->in('Feature');
+```
+
+`beforeEach()` runs before every test.  `withToken()` attaches an `Authorization: Bearer` header to every request that the test sends.  Tests that need a different role, or no token, override it.
+
+The `userToken()` and `adminToken()` helpers in `tests/Helpers.php` create tokens directly from `JwtService`, without going through the login endpoint:
+
+```php
+function userToken(): string
+{
+    return app(JwtService::class)->generateToken(1, 'tokenuser', 'USER');
+}
+
+function adminToken(): string
+{
+    return app(JwtService::class)->generateToken(1, 'tokenadmin', 'ADMIN');
+}
+```
+
+`app()` fetches an object from the service container.  Since `JwtService` needs a secret, the tests need one too.  We define a dummy secret in `phpunit.xml`, next to the other test settings:
+
+```xml
+<env name="STARZZ_JWT_SECRET" value="test-secret-key-for-tests-only-0123456789"/>
+```
+
+The tests therefore never depend on the real secret in `.env`.
+
+A few existing tests still fail, because registering a user now requires an admin token.  We override the default in those tests, e.g. in `tests/Feature/UserApiTest.php`:
+
+```php
+$this->withToken(adminToken())
+    ->postJson('/api/users', createUserPayload(['firstName' => 'Test']))
+```
+
+Now for the new tests.  In `tests/Unit` we create `JwtServiceTest.php`, which tests the service in isolation:
+
+```php
+it('generates a token with the correct claims', function () {
+    $jwt = makeJwtService();
+
+    $claims = $jwt->decode($jwt->generateToken(1, 'john', 'USER'));
+
+    expect($claims['sub'])->toBe('1')
+        ->and($claims['username'])->toBe('john')
+        ->and($claims['role'])->toBe('USER')
+        ->and($claims['exp'] - $claims['iat'])->toBe(3600);
+});
+
+it('throws when decoding an expired token', function () {
+    $jwt = makeJwtService(ttl: -10);
+
+    expect(fn () => $jwt->decode($jwt->generateToken(1, 'john', 'USER')))
+        ->toThrow(ExpiredException::class);
+});
+
+it('throws when decoding a token signed with a different secret', function () {
+    $token = makeJwtService()->generateToken(1, 'john', 'USER');
+
+    expect(fn () => makeJwtService('a-completely-different-secret-key-0123')->decode($token))
+        ->toThrow(SignatureInvalidException::class);
+});
+```
+
+`makeJwtService()` is a small helper in the same file that builds a `JwtService` with a test secret and a one hour lifetime.  Passing a negative lifetime creates a token that has already expired, which spares us from waiting for one to expire.  The third test verifies that a token signed with another secret is rejected, which is exactly what protects us against forged tokens.
+
+We also add unit tests for `LoginRequest` (both fields are required) and for the login route (an empty body results in HTTP 400).
+
+In `tests/Feature` we create `AuthApiTest.php`, which tests the full flow with the database.  Each test creates its own user:
+
+```php
+it('POST login returns a token for valid credentials', function () {
+    $user = createLoginUser();
+
+    $token = $this->postJson('/api/login', ['username' => 'loginuser', 'password' => 'password'])
+        ->assertOk()
+        ->assertJsonStructure(['token'])
+        ->json('token');
+
+    $claims = app(JwtService::class)->decode($token);
+
+    expect($claims['sub'])->toBe((string) $user->user_id)
+        ->and($claims['username'])->toBe('loginuser')
+        ->and($claims['role'])->toBe('USER');
+});
+
+it('POST login issues the ADMIN role to a user in the admin list', function () {
+    config(['starzz.admins' => ['loginadmin']]);
+    createLoginUser('loginadmin');
+
+    $token = $this->postJson('/api/login', ['username' => 'loginadmin', 'password' => 'password'])
+        ->assertOk()
+        ->json('token');
+
+    expect(app(JwtService::class)->decode($token)['role'])->toBe('ADMIN');
+});
+```
+
+`createLoginUser()` is a helper in the same file that saves a user with the given password; the `hashed` cast from the previous chapter hashes it.  The first test decodes the token that the endpoint returned, and checks its claims.  In the second test, `config()` changes the admin list for the duration of the test, so the test doesn't depend on the real admins existing in the database.
+
+The other login tests cover the remaining outcomes: a wrong password and an unknown user both result in HTTP 401 with the same message, and a user whose password is the sentinel results in HTTP 403 with the user's `userId`.
+
+The next tests verify our access rules end to end:
+
+```php
+it('a token from login grants access to a protected endpoint', function () {
+    createLoginUser();
+
+    $token = $this->postJson('/api/login', ['username' => 'loginuser', 'password' => 'password'])
+        ->json('token');
+
+    $this->withToken($token)->getJson('/api/users')->assertOk();
+});
+
+it('returns HTTP 401 on protected endpoints without a token', function (string $method, string $uri) {
+    $this->withHeader('Authorization', '')
+        ->json($method, $uri)
+        ->assertUnauthorized();
+})->with([
+    'GET users' => ['GET', '/api/users'],
+    'POST users' => ['POST', '/api/users'],
+    'POST galaxies' => ['POST', '/api/galaxies'],
+    'DELETE star' => ['DELETE', '/api/stars/1'],
+    // ...
+]);
+
+it('returns HTTP 200 on public endpoints without a token', function (string $uri) {
+    $this->withHeader('Authorization', '')
+        ->getJson($uri)
+        ->assertOk();
+})->with([
+    'galaxies' => '/api/galaxies',
+    'constellation' => '/api/constellations/1',
+    'star' => '/api/stars/1',
+    // ...
+]);
+```
+
+The first test is the key one: it uses a real token from the login endpoint, so it exercises the middleware end to end.  The second and third are datasets that go through every protected and public endpoint.  Public endpoints are tested too, so we verify that they are open instead of just assuming it.  `withHeader('Authorization', '')` replaces the default token from `beforeEach()` with an empty header, so the request has no token.
+
+We then test bad tokens:
+
+```php
+it('returns HTTP 401 for a token signed with a different secret', function () {
+    $token = (new JwtService('a-completely-different-secret-key-0123', 3600))
+        ->generateToken(1, 'intruder', 'ADMIN');
+
+    $this->withToken($token)->getJson('/api/users')->assertUnauthorized();
+});
+
+it('returns HTTP 401 for an expired token', function () {
+    $token = (new JwtService(config('starzz.jwt_secret'), -10))
+        ->generateToken(1, 'expired', 'USER');
+
+    $this->withToken($token)->getJson('/api/users')->assertUnauthorized();
+});
+```
+
+The first test builds a token with the `ADMIN` role, but signed with another secret.  Our application rejects it even though its payload looks valid, which shows that the signature is what we really trust.  There is also a test for a garbage token.
+
+Finally, we test the role rule:
+
+```php
+it('POST users returns HTTP 403 for a USER token', function () {
+    $this->withToken(userToken())
+        ->postJson('/api/users', createUserPayload())
+        ->assertForbidden();
+
+    $this->assertDatabaseMissing('users', ['username' => 'testuser']);
+});
+
+it('POST users returns HTTP 201 for an ADMIN token', function () {
+    $this->withToken(adminToken())
+        ->postJson('/api/users', createUserPayload())
+        ->assertCreated();
+});
+```
+
+A regular user receives HTTP 403, and `assertDatabaseMissing()` confirms that nothing was saved.  An admin receives HTTP 201.
+
+</details>
+
 ## Conclusion
 
-**starzz-laravel** demonstrates a complete, production-style Laravel REST API built incrementally — from setting up routes to database interaction and password hashing.  It also includes unit and integration tests to ensure correctness of the application's functionality as it increases in complexity.
+**starzz-laravel** demonstrates a complete, production-style Laravel REST API built incrementally — from setting up routes and wiring in a MySQL database, to layering in API Resources, Form Requests and global exception handling, to covering the application with unit and integration tests, to securing passwords with hashing and locking down the API with JWT-based authentication and role-based access control.  Each chapter builds on the last, reflecting how a real backend evolves in practice.

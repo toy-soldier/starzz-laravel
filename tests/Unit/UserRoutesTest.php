@@ -19,7 +19,8 @@ it('PUT returns HTTP 404 for a non-numeric id', function () {
 });
 
 it('POST returns HTTP 400 with errors when the body fails validation', function () {
-    $this->post('/api/users', [])
+    $this->withToken(adminToken())
+        ->post('/api/users', [])
         ->assertStatus(400)
         ->assertJsonValidationErrors(['username', 'email']);
 });

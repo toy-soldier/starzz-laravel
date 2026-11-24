@@ -7,6 +7,38 @@
   },
   "item": [
     {
+      "name": "Login",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n    \"username\": \"john\",\r\n    \"password\": \"secret\"\r\n}\r\n",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://127.0.0.1:{{port}}/api/login",
+          "protocol": "http",
+          "host": [
+            "127",
+            "0",
+            "0",
+            "1"
+          ],
+          "port": "{{port}}",
+          "path": [
+            "api",
+            "login"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
       "name": "List Constellations",
       "request": {
         "method": "GET",
@@ -33,7 +65,12 @@
       "name": "Register Constellation",
       "request": {
         "method": "POST",
-        "header": [],
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
         "body": {
           "mode": "raw",
           "raw": "{\r\n    \"constellationName\": \"Test Constellation\",\r\n    \"galaxyId\": 1,\r\n    \"adderId\": 1,\r\n    \"verifierId\": null\r\n}",
@@ -89,7 +126,12 @@
       "name": "Update Constellation",
       "request": {
         "method": "PUT",
-        "header": [],
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
         "body": {
           "mode": "raw",
           "raw": "{\r\n    \"constellationName\": \"Test Constellation\",\r\n    \"galaxyId\": 1,\r\n    \"adderId\": 1,\r\n    \"verifierId\": null\r\n}",
@@ -122,7 +164,12 @@
       "name": "Delete Constellation",
       "request": {
         "method": "DELETE",
-        "header": [],
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
         "url": {
           "raw": "http://127.0.0.1:{{port}}/api/constellations/1",
           "protocol": "http",
@@ -169,7 +216,12 @@
       "name": "Register Galaxy",
       "request": {
         "method": "POST",
-        "header": [],
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
         "body": {
           "mode": "raw",
           "raw": "{\r\n    \"galaxyName\": \"Test Galaxy\",\r\n    \"galaxyType\": \"Barred Spiral\",\r\n    \"distanceMly\": 4096,\r\n    \"redshift\": 4,\r\n    \"massSolar\": 40000,\r\n    \"diameterLy\": 444,\r\n    \"adderId\": 25,\r\n    \"verifierId\": 12\r\n}",
@@ -225,7 +277,12 @@
       "name": "Update Galaxy",
       "request": {
         "method": "PUT",
-        "header": [],
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
         "body": {
           "mode": "raw",
           "raw": "{\r\n    \"galaxyName\": \"Testing Galaxy\",\r\n    \"galaxyType\": \"Spiral\",\r\n    \"distanceMly\": 8192,\r\n    \"redshift\": 8,\r\n    \"massSolar\": 80000,\r\n    \"diameterLy\": 444,\r\n    \"adderId\": 25\r\n}",
@@ -236,7 +293,7 @@
           }
         },
         "url": {
-          "raw": "http://127.0.0.1:{{port}}/api/galaxies/102",
+          "raw": "http://127.0.0.1:{{port}}/api/galaxies/101",
           "protocol": "http",
           "host": [
             "127",
@@ -248,7 +305,7 @@
           "path": [
             "api",
             "galaxies",
-            "102"
+            "101"
           ]
         }
       },
@@ -258,9 +315,14 @@
       "name": "Delete Galaxy",
       "request": {
         "method": "DELETE",
-        "header": [],
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
         "url": {
-          "raw": "http://127.0.0.1:{{port}}/api/galaxies/1",
+          "raw": "http://127.0.0.1:{{port}}/api/galaxies/101",
           "protocol": "http",
           "host": [
             "127",
@@ -272,7 +334,7 @@
           "path": [
             "api",
             "galaxies",
-            "1"
+            "101"
           ]
         }
       },
@@ -305,7 +367,12 @@
       "name": "Register Star",
       "request": {
         "method": "POST",
-        "header": [],
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
         "body": {
           "mode": "raw",
           "raw": "{\r\n    \"starName\": \"Test Star\",\r\n    \"starType\": \"giant\",\r\n    \"constellationId\": 45,\r\n    \"rightAscension\": 10,\r\n    \"declination\": -4,\r\n    \"apparentMagnitude\": 4,\r\n    \"spectralType\": \"O\",\r\n    \"adderId\": 6\r\n}",
@@ -361,7 +428,12 @@
       "name": "Update Star",
       "request": {
         "method": "PUT",
-        "header": [],
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
         "body": {
           "mode": "raw",
           "raw": "{\r\n    \"starName\": \"Testing Star\",\r\n    \"starType\": \"supergiant\",\r\n    \"constellationId\": 36,\r\n    \"rightAscension\": 20,\r\n    \"declination\": -8,\r\n    \"apparentMagnitude\": 8,\r\n    \"spectralType\": \"S\",\r\n    \"adderId\": 6,\r\n    \"verifierId\": 67\r\n}",
@@ -394,7 +466,12 @@
       "name": "Delete Star",
       "request": {
         "method": "DELETE",
-        "header": [],
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
         "url": {
           "raw": "http://127.0.0.1:{{port}}/api/stars/1",
           "protocol": "http",
@@ -441,10 +518,15 @@
       "name": "Register User",
       "request": {
         "method": "POST",
-        "header": [],
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
         "body": {
           "mode": "raw",
-          "raw": "{\r\n    \"username\": \"jdoe123\",\r\n    \"email\": \"john.doe@aol.com\",\r\n    \"firstName\": \"John\",\r\n    \"lastName\": \"Doe\",\r\n    \"dateOfBirth\": \"1991-08-04\"\r\n}\r\n",
+          "raw": "{\r\n    \"username\": \"john\",\r\n    \"email\": \"john.doe@aol.com\",\r\n    \"firstName\": \"John\",\r\n    \"lastName\": \"Doe\",\r\n    \"dateOfBirth\": \"1991-08-04\"\r\n}\r\n",
           "options": {
             "raw": {
               "language": "json"
@@ -497,7 +579,12 @@
       "name": "Update User",
       "request": {
         "method": "PUT",
-        "header": [],
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
         "body": {
           "mode": "raw",
           "raw": "{\r\n    \"username\": \"mbrown221\",\r\n    \"email\": \"mark.brown@yahoo.com\",\r\n    \"firstName\": \"Mark\",\r\n    \"lastName\": \"Brown\",\r\n    \"dateOfBirth\": \"1986-02-17\"\r\n}\r\n",
@@ -533,7 +620,7 @@
         "header": [],
         "body": {
           "mode": "raw",
-          "raw": "{\r\n    \"existingPassword\": \"oldPassword\",\r\n    \"newPassword\": \"newPassword\"\r\n}\r\n",
+          "raw": "{\r\n    \"existingPassword\": \"resetRequired\",\r\n    \"newPassword\": \"secret\"\r\n}\r\n",
           "options": {
             "raw": {
               "language": "json"
@@ -589,6 +676,10 @@
     {
       "key": "port",
       "value": "8000"
+    },
+    {
+      "key": "token",
+      "value": ""
     }
   ]
 }

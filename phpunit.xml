@@ -32,5 +32,6 @@
         <env name="PULSE_ENABLED" value="false"/>
         <env name="TELESCOPE_ENABLED" value="false"/>
         <env name="NIGHTWATCH_ENABLED" value="false"/>
+        <env name="STARZZ_JWT_SECRET" value="test-secret-key-for-tests-only-0123456789"/>
     </php>
 </phpunit>

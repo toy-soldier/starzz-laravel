@@ -8,8 +8,18 @@ use Illuminate\Foundation\Testing\DatabaseTransactions;
 
 require_once __DIR__ . '/Helpers.php';
 
-pest()->extend(Tests\TestCase::class)->in('Unit');
-pest()->extend(Tests\TestCase::class)->use(DatabaseTransactions::class)->in('Feature');
+pest()->extend(Tests\TestCase::class)
+    ->beforeEach(function () {
+        $this->withToken(userToken());
+    })
+    ->in('Unit');
+
+pest()->extend(Tests\TestCase::class)
+    ->use(DatabaseTransactions::class)
+    ->beforeEach(function () {
+        $this->withToken(userToken());
+    })
+    ->in('Feature');
 /**
  * Validate data against a Form Request's rules, skipping `exists:` rules
  * because those need a database.

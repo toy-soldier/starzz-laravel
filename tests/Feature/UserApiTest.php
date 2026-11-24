@@ -32,7 +32,8 @@ it('GET returns HTTP 404 for a nonexistent id', function () {
 });
 
 it('POST creates a user and returns HTTP 201 without the password', function () {
-    $this->postJson('/api/users', createUserPayload(['firstName' => 'Test']))
+    $this->withToken(adminToken())
+        ->postJson('/api/users', createUserPayload(['firstName' => 'Test']))
         ->assertCreated()
         ->assertJson(['username' => 'testuser', 'email' => 'email@test.com', 'firstName' => 'Test'])
         ->assertJsonMissingPath('password');
@@ -41,7 +42,8 @@ it('POST creates a user and returns HTTP 201 without the password', function () 
 });
 
 it('POST saves the password reset sentinel as a hashed password', function () {
-    $this->postJson('/api/users', createUserPayload())->assertCreated();
+    $this->withToken(adminToken())
+        ->postJson('/api/users', createUserPayload())->assertCreated();
 
     $sentinel = config('starzz.password_reset_sentinel');
     $user = User::where('username', 'testuser')->firstOrFail();
@@ -96,7 +98,8 @@ it('PATCH returns HTTP 400 and keeps the password when the existing password is 
 });
 
 it('PATCH replaces the sentinel password of a newly registered user', function () {
-    $id = $this->postJson('/api/users', createUserPayload())->assertCreated()->json('userId');
+    $id = $this->withToken(adminToken())
+        ->postJson('/api/users', createUserPayload())->assertCreated()->json('userId');
 
     $this->patchJson("/api/users/{$id}/change-password", [
         'existingPassword' => config('starzz.password_reset_sentinel'),

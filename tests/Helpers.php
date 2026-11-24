@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\Services\JwtService;
 use App\Models\Constellation;
 use App\Models\Galaxy;
 use App\Models\Star;
@@ -177,4 +178,21 @@ function insertStar(int $constellationId, string $name = 'Test Star'): Star
         'spectral_type' => 'O',
         'added_by' => 1,
     ]);
+}
+function createLoginPayload(array $overrides = []): array
+{
+    return array_merge([
+        'username' => 'testuser',
+        'password' => 'password',
+    ], $overrides);
+}
+
+function userToken(): string
+{
+    return app(JwtService::class)->generateToken(1, 'tokenuser', 'USER');
+}
+
+function adminToken(): string
+{
+    return app(JwtService::class)->generateToken(1, 'tokenadmin', 'ADMIN');
 }
